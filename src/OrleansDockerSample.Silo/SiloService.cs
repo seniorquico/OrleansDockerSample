@@ -3,8 +3,10 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using Orleans;
 using Orleans.Configuration;
 using Orleans.Hosting;
+using Orleans.Statistics;
 
 namespace OrleansDockerSample
 {
@@ -88,6 +90,12 @@ namespace OrleansDockerSample
                             options.IncludeScopes = true;
                         });
                     })
+                    .Configure<LoadSheddingOptions>(options =>
+                    {
+                        options.LoadSheddingEnabled = true;
+                        options.LoadSheddingLimit = 90;
+                    })
+                    .UseLinuxEnvironmentStatistics()
                     .Build();
                 await this.silo.StartAsync(cancellationToken).ConfigureAwait(false);
 
