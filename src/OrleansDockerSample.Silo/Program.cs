@@ -1,10 +1,13 @@
 ﻿using System;
-using System.Runtime.Loader;
-using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Orleans;
+using Orleans.Configuration;
+using Orleans.Hosting;
+using Orleans.Statistics;
 
 namespace OrleansDockerSample
 {
@@ -19,22 +22,50 @@ namespace OrleansDockerSample
             }
         }
 
-        private static async Task Main(string[] args)
+        private static Task Main(string[] args)
         {
-            // Cancel all tasks on SIGINT (Ctrl+C) and SIGTERM (process exiting).
-            var cancellationTokenSource = new CancellationTokenSource();
-            AssemblyLoadContext.Default.Unloading += context =>
-            {
-                cancellationTokenSource.Cancel();
-            };
-            Console.CancelKeyPress += (sender, e) =>
-            {
-                cancellationTokenSource.Cancel();
-                e.Cancel = true;
-            };
+            var configuration = new ConfigurationBuilder()
+                .AddEnvironmentVariables()
+                .Build();
 
-            using (var services = new ServiceCollection()
-                .AddLogging(builder =>
+            return new HostBuilder()
+                .UseOrleans(builder =>
+                {
+                    var connectionString = configuration["ConnectionString"];
+                    if (string.IsNullOrWhiteSpace(connectionString))
+                    {
+                        builder
+                            .UseLocalhostClustering(
+                                siloPort: 11111,
+                                gatewayPort: 30000,
+                                primarySiloEndpoint: null,
+                                serviceId: "OrleansDockerSample",
+                                clusterId: "Primary");
+                    }
+                    else
+                    {
+                        builder
+                            .Configure<ClusterOptions>(options =>
+                            {
+                                options.ClusterId = "Primary";
+                                options.ServiceId = "OrleansDockerSample";
+                            })
+                            .UseAzureStorageClustering(options =>
+                            {
+                                options.ConnectionString = connectionString;
+                            })
+                            .ConfigureEndpoints(siloPort: 11111, gatewayPort: 30000);
+                    }
+
+                    builder
+                        .Configure<LoadSheddingOptions>(options =>
+                        {
+                            options.LoadSheddingEnabled = true;
+                            options.LoadSheddingLimit = 90;
+                        })
+                        .UseLinuxEnvironmentStatistics();
+                })
+                .ConfigureLogging(builder =>
                 {
                     builder.AddConsole(options =>
                     {
@@ -42,24 +73,7 @@ namespace OrleansDockerSample
                         options.IncludeScopes = true;
                     });
                 })
-                .AddSingleton<IConfiguration>(new ConfigurationBuilder().AddEnvironmentVariables().Build())
-                .AddSingleton<SiloService>()
-                .BuildServiceProvider())
-            {
-                var service = services.GetService<SiloService>();
-                try
-                {
-                    await service.StartAsync(cancellationTokenSource.Token).ConfigureAwait(false);
-                    await Task.Delay(Timeout.Infinite, cancellationTokenSource.Token).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                }
-                finally
-                {
-                    await service.StopAsync(CancellationToken.None).ConfigureAwait(false);
-                }
-            }
+                .RunConsoleAsync();
         }
     }
 }
